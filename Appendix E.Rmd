@@ -1,0 +1,167 @@
+
+
+```{r}
+read.azk <- function(file, acc = FALSE, item.order = FALSE, read.max = 20000, warn = FALSE)
+{
+  fp <- file(file, open="r")
+  f.end <- 0
+  ast.line <- c()
+  while((cl <- length(fc <- readLines(fp, read.max, warn=warn))) > 0 )
+  {
+    f.end <- f.end+cl;
+    ast.line <- c(ast.line, grep("\\*+", fc))
+  }
+  close(fp)
+  
+  sbj.line <- ast.line + 1
+  end.line <- c(ast.line[-1] - 2, f.end)
+  data <- list()
+  for(i in 1:length(ast.line))
+  {
+    s.tmp <- scan(file, skip=ast.line[i], what=character(), nlines =1, quiet = !warn)
+    s.tmp <- gsub(",$","", s.tmp)
+    header <- scan(file, skip=sbj.line[i], what=character(), nlines=1, quiet = !warn)
+    what <- list(Item=numeric(),RT=numeric())
+    if(length(header) > 2) what$COT <- numeric()
+    d.list <- scan(file, skip=sbj.line[i]+1, what=what,
+                   nlines=(end.line[i]-sbj.line[i]-1), comment.char="!", quiet = !warn)
+    if(acc){
+      d.list$ACC <- as.numeric(d.list$RT>0)
+      d.list$RT <- abs(d.list$RT)
+    }
+    if(item.order){
+      d.list$item.order <- 1:length(d.list$RT)
+    }
+    data[[i]] <- data.frame(sbj=s.tmp[2], date=s.tmp[3], time=s.tmp[4],
+                            machine=s.tmp[6], refresh=s.tmp[8], id=s.tmp[10],
+                            d.list)
+  }
+  do.call("rbind", data)
+}
+```
+
+
+```{r warning=FALSE, message=FALSE}
+#packages
+
+library(tidyverse)
+library(plyr)
+library(lme4)
+```
+
+```{r}
+
+#creating a table with all the data
+folder <- list.files(pattern=".azk")
+
+collect_files <- function(x) {
+  readin <-  read.azk(x) 
+  return(readin)
+}
+
+all <- ldply(folder, collect_files)
+ 
+
+```
+
+```{r}
+#data wrangling
+all2 <- all %>%
+  select(1, 7, 8) %>%
+  filter(Item > 100) #removes filler items
+all2[all2=="122413"]<-12213 # there was a typo in one of the original files
+
+
+#creating separate columns for the 3 factors
+all2 <- all2 %>%
+  separate(Item, c("item", "id"), sep = -3) %>%
+  separate(item, c ("item", "emoticon"), -2) %>%
+  separate(item, c("familiarity", "context"), -2) %>%
+  mutate(TF = if_else(RT < 0, "incorr", "corr")) %>%
+  mutate(RT = abs(RT)) %>%
+  arrange(id) %>%
+  mutate(sj = rep(1:64, 64)) # in the 8 azk files the subject numbers ranged from 1 to 8
+```
+
+
+```{r}
+#data visualisation
+
+fctrs <- c('familiarity' , 'context', 'emoticon')
+lvls <-tibble(x = c('familiar', 'ironic', 'present'), y = c('unfamiliar', 'literal', 'absent'))
+
+#main effects
+for (fs in 1:3){
+  
+  print(all2 %>%
+          group_by(eval(parse(text = fctrs[fs]))) %>%
+          dplyr::count(TF) %>%
+          filter (TF == 'corr')%>%
+          mutate('probability of correct response' = n/2048) %>% 
+          mutate(std = sqrt(`probability of correct response`*(1-`probability of correct response`))) %>%
+          mutate(err = sqrt(std/2048)) %>%
+            ggplot(aes(`eval(parse(text = fctrs[fs]))`, `probability of correct response`)) 
+          + geom_line(aes(group = 1), size = 1, colour = 'salmon') 
+          + geom_point(size = 3, colour = 'salmon')  + theme_bw() 
+          + ylim(0.5, 1) 
+          + scale_x_discrete(labels=c("1" = lvls$x[fs], "2" = lvls$y[fs]))
+          + labs(x = fctrs[fs])
+          + geom_errorbar(aes(ymin = `probability of correct response`-err, ymax = `probability of correct response`+err), width=.07, colour = 'grey40'))
+  
+}
+```
+ 
+
+```{r}
+#data visualisation
+#interactions
+
+combinations <-tibble(x = c('familiarity', 'emoticon', 'emoticon'), y = c('context', 'context', 'familiarity'))
+
+renaming <- tibble(x = c('familiar', 'present', 'present'), y = c('unfamiliar', 'absent', 'absent'), w = c('ironic', 'ironic', 'familiar'), z = c('literal', 'literal', 'unfamiliar'))
+
+for (fs in 1:3){
+  
+  print(all2 %>%
+          group_by(eval(parse(text = combinations$x[fs])), eval(parse(text = combinations$y[fs]))) %>%
+          mutate(`eval(parse(text = combinations$x[fs]))` = if_else(`eval(parse(text = combinations$x[fs]))` == "1", renaming$x[fs], renaming$y[fs]),
+                 `eval(parse(text = combinations$y[fs]))` = if_else(`eval(parse(text = combinations$y[fs]))` == "1", renaming$w[fs], renaming$z[fs])) %>%
+          dplyr::count(TF) %>%
+          filter(TF == 'corr')%>%
+          mutate('probability of correct response' = n/1024) %>% 
+          mutate('std' = sqrt(`probability of correct response`*(1-`probability of correct response`))) %>%
+          mutate('err' = sqrt(std/1024)) %>%
+          select(1, 2, 5, 7) %>%
+          ggplot(aes(`eval(parse(text = combinations$x[fs]))`, `probability of correct response`, linetype = `eval(parse(text = combinations$y[fs]))`,
+                     group = `eval(parse(text = combinations$y[fs]))`, shape = `eval(parse(text = combinations$y[fs]))`, colour = `eval(parse(text = combinations$y[fs]))`)) +
+          geom_line(size = 1) + geom_point(size = 3) + theme_bw() + labs(x = combinations$x[fs])  + labs(color= combinations$y[fs], shape = combinations$y[fs], linetype = combinations$y[fs]) + ylim(0, 1)+ geom_errorbar(aes(ymin = `probability of correct response`- err, ymax = `probability of correct response`+ err), width=.07, colour = 'grey40'))
+}
+
+```
+
+
+```{r}
+#Maximal binary logistic GLMM
+
+all2 <- all2 %>%
+  mutate(familiarity = scale(ifelse(all2$familiarity=="1",0,1), scale=FALSE), 
+         context = scale(ifelse(all2$context=="1",0,1), scale=FALSE), 
+         emoticon = scale(ifelse(all2$emoticon=="1",0,1), scale=FALSE), 
+         TF = if_else(TF == "incorr", 0, 1))
+
+# with randomn correlations it fails to converge
+
+mod <- glmer(TF ~ familiarity*emoticon*context + (1 + familiarity*emoticon*context || sj) + (1 + emoticon*context || id), data = all2, family=binomial(logit), control = glmerControl(optimizer = c("bobyqa"))) 
+summary(mod)
+```
+
+
+```{r}
+# no main effect of context
+
+mod_no_context <- glmer(TF ~ familiarity*emoticon*context - context + (1 + familiarity*emoticon*context || sj) + (1 + emoticon*context || id), data = all2, family=binomial(logit), control = glmerControl(optimizer = c("bobyqa"))) 
+
+
+anova(mod, mod_no_context, test="Chi")
+
+```

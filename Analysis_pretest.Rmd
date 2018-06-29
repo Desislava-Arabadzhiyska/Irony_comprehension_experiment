@@ -1,0 +1,78 @@
+---
+title: "DA"
+output: html_document
+---
+
+```{r}
+library("tidyverse")
+```
+
+```{r}
+file1 <- readxl::read_excel("questionnaire 1.xlsx") 
+file2 <- readxl::read_excel("questionnaire 2.xlsx")
+file3 <- readxl::read_excel("questionnaire 3.xlsx")
+```
+
+
+#This creates a function called "calculatemean", which transforms the data from wide format to long; groups by the question and then calculates the mean response per question. The function requires a table (x) to run
+```{r}
+
+calculatemean <- function(x) {
+  x %>%
+  gather("q", "score", 3:130) %>%
+  group_by(q) %>%
+  summarise(mean = mean(score, na.rm = TRUE))
+}
+
+```
+
+
+#This creates 3 tables with the mean responses per question for the 3 questionnaires
+```{r}
+mean1 <- calculatemean(file1)
+
+mean2 <- calculatemean(file2)
+
+mean3 <- calculatemean(file3)
+```
+
+
+#Now that the questionnaire data is in long format the 3 questionnaires can be joined according to the question. Afterwards, the mean and the sd are calculated across the 3 questionnaires
+```{r}
+
+tog <- full_join(mean1, mean2, by = "q") %>% 
+  full_join(mean3, by = "q") %>%
+  gather("quest", "score", 2:3) %>%
+  group_by(q) %>%
+  summarise(mean = mean(score, na.rm = TRUE))
+```
+
+
+#this is a graph of the distribution 
+```{r}
+tog %>% ggplot(aes()) + geom_density(aes(mean))
+```
+
+#selects the least familiar items and clculates mean and sd
+```{r}
+bottom32 <- tog %>%
+  arrange(mean) %>%
+  top_n(-32, mean)
+
+meanb32<- bottom32 %>%
+  summarise(MEAN = mean(mean), 
+            SD = sd(mean))
+```
+
+#Selects the most familiar items
+```{r}
+top32 <- tog %>%
+  arrange(desc(mean)) %>%
+  top_n(32, mean)
+
+meant32<- top32 %>%
+  summarise(MEAN = mean(mean), 
+            SD = sd(mean))
+```
+
+
